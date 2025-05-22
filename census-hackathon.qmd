@@ -1,0 +1,437 @@
+---
+title: "Census Dataset Hack-a-thon"
+subtitle: "Statistical Machine Learning: Data Analysis"
+author: "Aayush Shrestha"
+date: today
+editor: visual
+
+format:
+  html:
+    embed-resources: true 
+    self-contained: true    
+    theme: darkly
+    highlight-style: atom-one-dark
+    smooth-scroll: true
+    scroll-progress: true
+    code-fold: show
+    code-tools: true 
+
+execute:
+  error: false
+  warning: false
+---
+
+# **Introduction**
+
+The Census Income dataset is an essential tool in exploring income classification problems using real-world demographic data. It contains detailed information about over 48,000 individuals, including features such as age, education level, occupation, marital status, and hours worked per week. The primary objective of this project is to build predictive models to determine whether an individual earns more than \$50,000 per year.
+
+This task closely mirrors real-world applications of data science in socioeconomic analysis and policy planning. I will apply classification techniques such as logistic regression alongside more advanced models like random forests and gradient boosting. A rigorous machine learning workflow will be implemented, including exploratory data analysis (EDA), preprocessing, feature selection, model tuning, and evaluation using cross-validation.
+
+Beyond predictive modeling, this project highlights essential practices in professional data science: ensuring data quality, interpreting model results, and creating reproducible analysis pipelines. The insights generated can help identify key demographic factors influencing income levels and simulate how such models might support public resource allocation or targeted economic programs. This analysis will be conducted using R, leveraging **tidyverse** for data wrangling and visualization, and **tidymodels** for machine learning workflows.
+
+By following a structured and statistically sound approach, this project not only strengthens technical proficiency but also deepens my understanding of how data science can support decision-making in public policy and social research.
+
+# **Dataset Variables**
+
+`age`: continuous.
+
+`workclass`: Private, Self-emp-not-inc, Self-emp-inc, Federal-gov, Local-gov, State-gov, Without-pay, Never-worked.
+
+`fnlwgt`: continuous. A weight that represents how common people with these exact age and racial demographics are in the United States.
+
+`education`: Bachelors, Some-college, 11th, HS-grad, Prof-school, Assoc-acdm, Assoc-voc, 9th, 7th-8th, 12th, Masters, 1st-4th, 10th, Doctorate, 5th-6th, Preschool.
+
+`education-num`: continuous. Numerical representation of education level.
+
+`marital-status`: Married-civ-spouse, Divorced, Never-married, Separated, Widowed, Married-spouse-absent, Married-AF-spouse. (“civ” and “AF” represent “civilian” (not in military) or “Armed Forces” (in military)).
+
+`occupation`: Tech-support, Craft-repair, Other-service, Sales, Exec-managerial, Prof-specialty, Handlers-cleaners, Machine-op-inspct, Adm-clerical, Farming-fishing, Transport-moving, Priv-house-serv, Protective-serv, Armed-Forces.
+
+`relationship`: Wife, Own-child, Husband, Not-in-family, Other-relative, Unmarried.
+
+`race`: White, Asian-Pac-Islander, Amer-Indian-Eskimo, Other, Black.
+
+`sex`: Female, Male.
+
+`capital-gain`: continuous. (Income from the sale of a capital asset, e.g., stocks or property)
+
+`capital-loss`: continuous. (A loss occurred when a capital asset, e.g., stocks or property, decreases in value.)
+
+`hours-per-week`: continuous. Number of hours worked per week.
+
+`native-country`: United-States, Cambodia, England, Puerto-Rico, Canada, Germany, Outlying-US (Guam-USVI-etc), India, Japan, Greece, South, China, Cuba, Iran, Honduras, Philippines, Italy, Poland, Jamaica, Vietnam, Mexico, Portugal, Ireland, France, Dominican-Republic, Laos, Ecuador, Taiwan, Haiti, Columbia, Hungary, Guatemala, Nicaragua, Scotland, Thailand, Yugoslavia, El-Salvador, Trinadad&Tobago, Peru, Hong, Holland-Netherlands.
+
+`income`: whether or not annual income from all sources is above or below \$50,000.
+
+# **Loading Libraries**
+
+```{r}
+#| message: false
+# Load required libraries
+library(tidyverse)
+library(tidymodels)
+library(knitr)
+library(janitor)
+library(ISLR2)
+library(readODS)
+library(kableExtra)
+library(kknn)
+library(ggrepel)
+library(yardstick)
+library(ggplot2)
+library(ggthemes)
+
+# Resolve conflicts in function names from loaded packages
+tidymodels_prefer()
+
+# Set seed for reproducibility, 2020 for 2020 Census
+set.seed(2020)
+
+```
+
+We’ve loaded essential packages such as **tidyverse** for data wrangling, **tidymodels** for constructing modeling workflows, and **ggplot2** along with **ggthemes** for creating professional visualizations. Utility libraries like **janitor** help clean and format the data consistently, while **yardstick** and **kableExtra** support evaluation and reporting. Setting the seed to 2020, the year of the U.S. Census, ensures reproducibility throughout this analysis.
+
+The next step is to import the training and testing datasets provided for this task. These contain demographic and employment-related attributes for thousands of individuals, which we’ll use to build models that classify whether someone earns more than \$50,000 annually. Let’s begin by loading and exploring the structure of these datasets.
+
+# **Loading Data and Splitting**
+
+```{r}
+# Read training and test datasets
+census_train <- read_csv("census_train.csv")
+census_test <- read_csv("census_test.csv")
+
+
+```
+
+We begin by loading the training and test datasets from CSV files. The **census_train** dataset will be used to build and tune our models, while **census_test** serves as a separate holdout set for final predictions. Before we proceed with modeling, we’ll inspect and clean the data to ensure it’s ready for analysis.
+
+# **Data Cleaning**
+
+```{r}
+# Function to clean the census data
+clean_census_data <- function(df, is_train = TRUE) {
+  if (names(df)[1] == "...1") {
+    df <- df |> select(-1)
+  }
+  df[df == "?"] <- NA  # Replace '?' with NA
+
+  if (is_train && "income" %in% names(df)) {
+    df <- df |> mutate(income = str_replace(income, "\\.$", ""))  # Remove trailing periods in income values
+  }
+
+  factor_vars <- c("workclass", "education", "marital-status", "occupation", 
+                   "relationship", "race", "sex", "native-country")
+  if (is_train) factor_vars <- c(factor_vars, "income")
+
+  df <- df |> mutate(across(all_of(factor_vars), as.factor))
+  return(df)
+}
+
+# Apply cleaning function to both datasets
+census_train_clean <- clean_census_data(census_train, is_train = TRUE)
+census_test_clean  <- clean_census_data(census_test, is_train = FALSE)
+```
+
+To prepare the data for analysis, I defined a custom cleaning function that handles a few key issues. First, it removes the unnamed index column automatically generated during CSV export. Next, any `"?"` entries, which represent missing values in this dataset, are converted to proper `NA` values for consistent handling. For the training set, trailing periods in the `income` column (e.g., `">50K."`) are removed to standardize the labels. Categorical columns such as `workclass`, `education`, `occupation`, and `sex` are explicitly converted to factors, ensuring that machine learning models treat them appropriately. This function is applied to both the training and test datasets, resulting in clean and structured data ready for exploratory analysis and modeling.
+
+# **Exploratory Data Analysis (EDA)**
+
+```{r}
+# Visualize income distribution
+census_train_clean |>
+  ggplot(aes(x = income)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Income Distribution", x = "Income", y = "Count")
+
+# Visualize age by income
+census_train_clean |>
+  ggplot(aes(x = age, fill = income)) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  labs(title = "Age Distribution by Income", x = "Age", y = "Count")
+
+# Workclass proportions by income
+census_train_clean |>
+  ggplot(aes(x = fct_infreq(workclass), fill = income)) +
+  geom_bar(position = "fill") +
+  coord_flip() +
+  labs(title = "Proportion of Income by Workclass", x = "Workclass", y = "Proportion") +
+  scale_y_continuous(labels = scales::percent)
+
+# Education vs income distribution
+census_train_clean |>
+  ggplot(aes(x = fct_infreq(education), fill = income)) +
+  geom_bar(position = "fill") +
+  coord_flip() +
+  labs(title = "Proportion of Income by Education", x = "Education", y = "Proportion") +
+  scale_y_continuous(labels = scales::percent)
+
+# Boxplot of hours worked by income group
+census_train_clean |>
+  ggplot(aes(x = income, y = `hours-per-week`, fill = income)) +
+  geom_boxplot() +
+  labs(title = "Work Hours per Week by Income", x = "Income", y = "Hours per Week")
+
+```
+
+We begin our analysis by examining the overall distribution of the target variable, `income`. The first bar chart clearly shows a significant class imbalance, with the majority of individuals earning less than or equal to \$50,000. This imbalance is important to keep in mind, as it can affect model performance and may necessitate techniques like stratified sampling.
+
+Next, we examine the relationship between age and income level. The age distribution suggests that individuals earning more than \$50,000 tend to be older, typically between 35 and 60 years of age. Meanwhile, the lower income group is more broadly distributed across the age spectrum, with a large concentration in the 20s and early 30s.
+
+Analyzing `workclass`, we observe that certain employment categories such as "Self-emp-inc" and "Federal-gov" have a noticeably higher proportion of individuals in the higher income bracket. In contrast, people working in "Private" sectors or those who are "Never-worked" are predominantly in the lower income group.
+
+The chart on `education` reaffirms the importance of higher education in income prediction. Individuals with advanced degrees (e.g., Doctorate, Prof-school, Masters) are much more likely to earn above \$50,000, while those with only primary or secondary education tend to fall into the lower income category.
+
+Finally, the boxplot for `hours-per-week` reveals that individuals in the high-income category generally work longer hours. There is a visible right shift in the distribution for those earning more than \$50,000, suggesting that work effort (in terms of hours) may be a significant predictive factor.
+
+All of these visualizations make proper sense and shows that our initial steps have been correct so far. They also provide a rich understanding of the underlying structure of the data and help identify which features may be most useful for classification for our modeling pipeline.
+
+# **Cross- Validation Folds**
+
+```{r}
+# 7-fold CV with 3 repeats, stratified by income
+training_folds <- vfold_cv(census_train_clean, v = 7, repeats = 3, strata = income)
+```
+
+To ensure robust model evaluation, I implemented a 7-fold cross-validation scheme with 3 repeats, stratified by the `income` variable. Stratification preserves the class proportions in each fold, which is crucial given the observed imbalance between high- and low-income classes. Repeating the process three times helps mitigate variance due to how the data is split, leading to more reliable performance estimates across different models. Originally, I wanted to do a 10-fold CV with 10 repetitions but the tuning process took a considerable amount of time with that so it wasn't practical in the end.
+
+# **Defining Models**
+
+```{r}
+# Logistic Regression Model
+log_model <- logistic_reg() |> set_engine("glm") |> set_mode("classification")
+
+# Random Forest Model
+rf_model <- rand_forest(mtry = tune(), min_n = tune(), trees = 500) |> 
+  set_engine("ranger", importance = "impurity") |> 
+  set_mode("classification")
+
+# XGBoost Model
+xgb_model <- boost_tree(trees = 500, learn_rate = tune(), tree_depth = tune(), min_n = tune()) |> 
+  set_engine("xgboost") |> 
+  set_mode("classification")
+
+```
+
+To compare modeling approaches and evaluate their effectiveness, I defined three types of classifiers: logistic regression, random forest, and XGBoost.
+
+Logistic regression was chosen as a baseline model due to its simplicity, interpretability, and strong performance when the relationship between predictors and the outcome is approximately linear. It helps establish a reference point for accuracy.
+
+Random forest, on the other hand, was selected for its ability to model nonlinear relationships and handle complex interactions between variables without extensive preprocessing. It is an ensemble method that aggregates the results of multiple decision trees to improve generalization and reduce overfitting. I configured it with 500 trees and set its hyperparameters (`mtry` and `min_n`) to be tuned during cross-validation.
+
+Finally, I included XGBoost, a powerful and efficient gradient boosting technique, known for its dominance in structured data competitions and practical applications. Its iterative approach to minimizing classification error makes it a strong contender for maximizing predictive performance.
+
+By testing models with different levels of complexity and learning mechanisms, I aim to compare their strengths and determine which best captures the patterns in the census income data.
+
+# **Preprocessing w/ Recipe**
+
+```{r}
+# Define preprocessing recipe
+census_recipe <- recipe(income ~ ., data = census_train_clean) |> 
+  step_zv(all_predictors()) |> 
+  step_nzv(all_predictors()) |> 
+  step_impute_mode(all_nominal_predictors()) |> 
+  step_impute_median(all_numeric_predictors()) |> 
+  step_unknown(all_nominal_predictors()) |> 
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) |> 
+  step_lincomb(all_numeric_predictors()) |> 
+  step_normalize(all_numeric_predictors()) 
+```
+
+To prepare the data for modeling, I created a preprocessing recipe that handles missing values, encodes categorical variables, removes redundant features, and normalizes numeric predictors. This ensures that all models receive clean, well-structured input and perform optimally, especially those sensitive to scale like logistic regression and XGBoost.
+
+# **Define Workflows**
+
+```{r}
+# Define workflows by combining models and recipe
+log_wf <- workflow() |> add_model(log_model) |> add_recipe(census_recipe)
+rf_wf  <- workflow() |> add_model(rf_model)  |> add_recipe(census_recipe)
+xgb_wf <- workflow() |> add_model(xgb_model) |> add_recipe(census_recipe)
+
+```
+
+After the preprocessing step, I created separate workflows for each model by combining them with the same preprocessing recipe. This setup ensures that all models use the same cleaned and prepared data, making the training process more consistent and allowing for straightforward tuning and comparison.
+
+# Tuning and Fitting
+
+```{r}
+# Random Forest: Grid Tuning
+#rf_grid <- grid_regular(
+#  mtry(range = c(5, 20)),    
+#  min_n(range = c(2, 10)),    
+#  levels = 3                  
+#)
+
+# Perform tuning via cross-validation
+#rf_results <- tune_grid(
+#  rf_wf,                       
+#  resamples = training_folds, 
+#  grid = rf_grid,             
+#  metrics = metric_set(accuracy)
+#)
+
+# Select best hyperparameters based on accuracy
+#best_rf <- select_best(rf_results, metric = "accuracy")
+
+# Finalize and fit the Random Forest model with best parameters
+#final_rf_fit <- rf_wf |>
+#  finalize_workflow(best_rf) |>
+#  fit(census_train_clean)
+
+# Save tuning results
+#saveRDS(rf_results, "rf_results.rds")
+#saveRDS(best_rf, "best_rf.rds")
+#saveRDS(final_rf_fit, "final_rf_fit.rds")
+```
+
+```{r}
+# XGBoost: Random Grid Search
+# Randomly sample 10 parameter combinations
+#xgb_grid <- grid_random(
+#  learn_rate(range = c(0.01, 0.3)), 
+#  tree_depth(range = c(3, 10)),    
+#  min_n(range = c(2, 10)),          
+#  size = 10                   
+#)
+
+# Tune using cross-validation
+#xgb_results <- tune_grid(
+#  xgb_wf,
+#  resamples = training_folds,
+#  grid = xgb_grid,
+#  metrics = metric_set(accuracy)
+#)
+
+# Choose best model based on accuracy
+#best_xgb <- select_best(xgb_results, metric = "accuracy")
+
+# Finalize and fit XGBoost model
+#final_xgb_fit <- xgb_wf |>
+#  finalize_workflow(best_xgb) |>
+#  fit(census_train_clean)
+
+#saveRDS(xgb_results, "xgb_results.rds")
+#saveRDS(best_xgb, "best_xgb.rds")
+#saveRDS(final_xgb_fit, "final_xgb_fit.rds")
+```
+
+```{r}
+# Load previously saved tuning results and models
+rf_results <- readRDS("rf_results.rds")
+best_rf <- readRDS("best_rf.rds")
+final_rf_fit <- readRDS("final_rf_fit.rds")
+
+xgb_results <- readRDS("xgb_results.rds")
+best_xgb <- readRDS("best_xgb.rds")
+final_xgb_fit <- readRDS("final_xgb_fit.rds")
+```
+
+```{r}
+# Logistic Regression Final Model
+final_log_fit <- fit(log_wf, data = census_train_clean)
+```
+
+(Commented out the actual tuning process since I saved the tuning results.)
+
+To optimize model performance, I conducted hyperparameter tuning using cross-validation. For the Random Forest model, I performed a regular grid search across combinations of `mtry` and `min_n`, selecting the best model based on accuracy. XGBoost was tuned using a randomized grid search due to its larger parameter space and computational intensity. Logistic regression, having no tunable parameters in this context, was fitted directly after preprocessing.
+
+This tuning process ensures that each model is tailored to the structure of the data, improving predictive performance while avoiding overfitting.
+
+# Prediction
+
+```{r}
+# Generate predictions on test data
+log_preds <- predict(final_log_fit, new_data = census_test_clean)
+rf_preds  <- predict(final_rf_fit, new_data = census_test_clean)
+xgb_preds <- predict(final_xgb_fit, new_data = census_test_clean)
+```
+
+We now use the finalized versions of each model to generate predictions on the cleaned test dataset. These predicted class labels allow us to compare model outputs.
+
+# **Metrics Evaluation**
+
+```{r}
+# Collect accuracy metrics from tuning results
+collect_metrics(rf_results) |> filter(.metric == "accuracy")
+collect_metrics(xgb_results) |> filter(.metric == "accuracy")
+
+# Logistic regression performance using cross-validation
+log_resample <- fit_resamples(
+  log_wf,
+  resamples = training_folds,
+  metrics = metric_set(accuracy)
+)
+
+collect_metrics(log_resample)
+
+```
+
+To assess the effectiveness of each model, I compared their cross-validated accuracy scores. For Random Forest and XGBoost, I collected the best results from the hyperparameter tuning phase. For logistic regression, which doesn't require tuning, I performed cross-validation separately using the same folds.
+
+On a quick glance, Random Forest clearly outperforms the others in accuracy. It’s also more robust across parameter choices. XGBoost, while powerful, didn’t beat RF in this case, possibly due to being more sensitive to noise. Logistic regression remains competitive and interpretable but ultimately wasn’t the top performer here. We will compare these more in depth.
+
+# **Final Summary and Model Comparison**
+
+```{r}
+# Extract top accuracy score for each model
+
+rf_acc <- show_best(rf_results, metric = "accuracy", n = 1)
+xgb_acc <- show_best(xgb_results, metric = "accuracy", n = 1)
+log_acc <- collect_metrics(log_resample) |> filter(.metric == "accuracy")
+
+# Combine into summary table
+model_comparison <- bind_rows(
+  mutate(log_acc, model = "Logistic Regression"),
+  mutate(rf_acc, model = "Random Forest"),
+  mutate(xgb_acc, model = "XGBoost")
+) |> 
+  select(model, mean, std_err) |> 
+  arrange(desc(mean))
+
+kable(model_comparison, caption = "Model Accuracy Comparison") |> 
+  kable_styling(bootstrap_options = "striped")
+
+```
+
+To assess model performance, I further compared the accuracy of all three approaches: Logistic Regression, Random Forest, and XGBoost, in more detail, based on their best-tuned configurations using 7-fold cross-validation with 3 repeats.
+
+The **Random Forest** model outperformed the others with an average accuracy of **0.839**, offering a robust balance between flexibility and generalizability. **Logistic Regression** followed closely behind with **0.834**, demonstrating strong performance despite its simplicity. **XGBoost**, while a powerful algorithm, achieved a lower average accuracy of **0.805**, suggesting possible overfitting or less suitability for this particular dataset and problem structure.
+
+Based on these results, **Random Forest was selected as the final model** due to its superior predictive accuracy and consistent performance across cross-validation folds.
+
+# **Prediction CSV**
+
+```{r}
+# Predict using best model (Random Forest)
+rf_preds <- predict(final_rf_fit, new_data = census_test_clean)
+
+# Convert to binary vector (1 for >50K, 0 otherwise)
+prediction_vector <- ifelse(rf_preds$.pred_class == ">50K", 1, 0)
+
+# Save to CSV
+write.csv(prediction_vector, "my_predictions.csv", row.names = FALSE)
+
+# Checks
+length(prediction_vector)
+table(prediction_vector)   
+
+```
+
+Using the best-performing model, **Random Forest**, I generated predictions on the unseen test data. The output was then converted into binary format (1 = income \> \$50K, 0 = income ≤ \$50K) for ease of interpretation.
+
+The resulting predictions were saved to a CSV file (`my_predictions.csv`) for submission. A quick check confirms that **13,840 predictions** were generated, consistent with the number of records in the test set. The distribution shows a significant class imbalance, with many more individuals predicted to earn less than \$50K, aligning with the training data trend.
+
+# **Conclusion**
+
+This project demonstrates a comprehensive machine learning workflow applied to the U.S. Census Income dataset, with the goal of predicting whether an individual's income exceeds \$50,000 based on demographic and employment-related features. From data cleaning and exploratory visualizations to model training, hyperparameter tuning, and evaluation, each step was designed to mirror best practices in Statistical Machine Learning.
+
+Three models: Logistic Regression, Random Forest, and XGBoost, were developed and compared using 7-fold cross-validation with 3 repeats. Among these, the **Random Forest** model achieved the best performance, with an average accuracy of **83.95%**, outperforming both Logistic Regression and XGBoost. Its high classification accuracy made it well-suited for this problem.
+
+The analysis revealed several strong predictors of income level, including **education**, **hours worked per week**, and **occupation**, reflecting broader patterns of socioeconomic inequality.
+
+Throughout the project, I prioritized reproducibility, interpretability, and correctness. Using the `tidymodels` framework and robust cross-validation, I ensured that model evaluation was statistically sound. This systematic approach aligns with how data science is practiced in real-world settingsbalancing predictive performance with clarity and insight.
+
+By the end of this workflow, I not only built an accurate classifier but also gained a deeper understanding of the factors influencing income in the U.S., reinforcing the role of data science in both technical problem-solving and evidence-based social inquiry.
+
+::: callout-note
+Some visual elements of this report and some debugging were done with the help of AI. Everything that was done using AI was fully understood and comprehended.
+:::
